@@ -1,24 +1,30 @@
 # Pokémon of the day
 
-Display mode that shows a different Generation I Pokémon every day: its
-Red/Blue sprite, Pokédex entry, type, height, weight and base stats, with the
-date and time in the corner.
+Display mode that shows a different Pokémon every day: its sprite, Pokédex
+entry, type, height, weight and base stats, with the date and time in the
+corner.
 
-All data is compiled into the firmware (`pokemon_data.c`, `pokemon_sprites.c`,
-roughly 180 KB of flash) so the view works offline. The Pokémon is chosen by
-hashing the local calendar date, so it stays the same all day, changes at
-midnight and survives reboots without any saved state.
+All data is compiled into the firmware (`pokemon_data.c`, `pokemon_sprites.c`)
+so the view works offline. The Pokémon is chosen by hashing the local calendar
+date, so it stays the same all day, changes at midnight and survives reboots
+without any saved state.
+
+The roster is the whole National Pokédex (#0001–#1025), roughly 1 MB of
+flash.
 
 ## Regenerating the data
 
-`generate.py` downloads names, Pokédex entries, stats and the Generation I
-gray sprites from [PokéAPI](https://pokeapi.co), upscales the 56x56 sprites 2x,
-dithers them to 1-bit and writes the C files.
+`generate.py` downloads names, Pokédex entries, stats and sprites from
+[PokéAPI](https://pokeapi.co), dithers the sprites to 1-bit and writes the C
+files. Each Pokémon keeps era-appropriate pixel art by using the oldest game
+that has it: Red/Blue gray for Generation I, then Crystal, Emerald, Platinum,
+Black/White, and PokéAPI's default sprites for anything newer. Sprites are
+upscaled by the largest integer factor that fits the view's 112x112 column.
 
 ```sh
 pip install pillow
-python3 generate.py            # Generation I (default)
-python3 generate.py --max-id 251
+python3 generate.py            # the whole National Pokédex (default)
+python3 generate.py --max-id 151
 ```
 
 Downloads are cached in `cache/` (git-ignored). Run `clang-format` on the

@@ -2,17 +2,22 @@
 """
 Generate the on-device Pokémon dataset used by the "Pokémon of the day" view.
 
-Downloads Pokédex data and Generation I (Red/Blue) sprites from PokéAPI, then
-emits two C files next to this script:
+Downloads Pokédex data and sprites from PokéAPI, then emits two C files next
+to this script:
 
   pokemon_data.c     Name, genus, type(s), Pokédex entry, size and base stats
   pokemon_sprites.c  1-bit LVGL images (upscaled, dithered) of each Pokémon
 
+Sprites come from the oldest game that has the Pokémon, so each one keeps its
+era-appropriate pixel art: Red/Blue gray for Generation I, then Crystal,
+Emerald, Platinum, Black/White, and finally PokéAPI's default sprites for
+anything newer.
+
 Everything is stored in flash so the device never needs network access to show
 the view. Re-run this script to change the roster or presentation:
 
-  python3 generate.py                # first 151 Pokémon (Generation I)
-  python3 generate.py --max-id 251   # up to Generation II
+  python3 generate.py                # the whole National Pokédex
+  python3 generate.py --max-id 151   # Generation I only
 
 Requires: python3, pillow (`pip install pillow`).
 """
@@ -24,6 +29,7 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -33,10 +39,22 @@ except ImportError:  # pragma: no cover
     sys.exit("pillow is required: pip install pillow")
 
 API = "https://pokeapi.co/api/v2"
-SPRITES = (
-    "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/"
-    "versions/generation-i/red-blue/transparent/gray/{id}.png"
-)
+SPRITES_BASE = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/"
+
+# Sprite sources in preference order, each with the highest Pokédex number the
+# game knows about. A 404 falls through to the next source; the default sprite
+# sheet covers every Pokémon.
+SPRITE_SOURCES = [
+    (151, "versions/generation-i/red-blue/transparent/gray/{id}.png"),
+    (251, "versions/generation-ii/crystal/transparent/{id}.png"),
+    (386, "versions/generation-iii/emerald/{id}.png"),
+    (493, "versions/generation-iv/platinum/{id}.png"),
+    (649, "versions/generation-v/black-white/{id}.png"),
+    (10000, "{id}.png"),
+]
+
+# The sprite must fit the view's 112x112 sprite column (lvgl/views/pokemon.c).
+SPRITE_MAX_PX = 112
 
 # Pokédex entry preference. The Red/Blue text is short enough for the 2.7"
 # screen and matches the Generation I sprites. Later games are fallbacks for
@@ -66,6 +84,9 @@ VERSION_PREFERENCE = [
     "moon",
     "sword",
     "shield",
+    "legends-arceus",
+    "scarlet",
+    "violet",
 ]
 
 # Ordered dither for the 2x2 block each source pixel becomes after upscaling.
@@ -83,6 +104,21 @@ def fetch(url: str, dest: Path, binary: bool = False):
         data = resp.read()
     dest.write_bytes(data)
     return data if binary else data.decode("utf-8")
+
+
+def fetch_sprite(pid: int, cache: Path) -> bytes:
+    dest = cache / "sprites" / f"{pid}.png"
+    last_error = None
+    for max_id, path in SPRITE_SOURCES:
+        if pid > max_id:
+            continue
+        try:
+            return fetch(SPRITES_BASE + path.format(id=pid), dest, binary=True)
+        except urllib.error.HTTPError as err:
+            if err.code != 404:
+                raise
+            last_error = err
+    raise last_error or FileNotFoundError(f"no sprite for #{pid}")
 
 
 def clean_text(text: str) -> str:
@@ -129,18 +165,25 @@ def c_string(text: str) -> str:
     return '"' + "".join(out) + '"'
 
 
-def sprite_bits(png_bytes: bytes, tmp: Path, scale: int):
-    """Return (width, height, stride, rows) for a 1-bit upscaled sprite."""
+def sprite_bits(png_bytes: bytes, tmp: Path, max_scale: int):
+    """Return (width, height, stride, rows) for a 1-bit upscaled sprite.
+
+    Sources range from 56x56 (Generation I/II) to 96x96 (modern default
+    sprites); each is cropped to content and upscaled by the largest integer
+    factor that keeps it within the view's SPRITE_MAX_PX square.
+    """
     tmp.write_bytes(png_bytes)
     img = Image.open(tmp).convert("RGBA")
     bbox = img.getbbox()
     if bbox:
         img = img.crop(bbox)
     src_w, src_h = img.size
+    scale = max(1, min(max_scale, SPRITE_MAX_PX // max(src_w, src_h)))
     w, h = src_w * scale, src_h * scale
     stride = (w + 7) // 8
 
-    # Darkness per source pixel: 0 (white/transparent) .. 1 (black)
+    # Darkness per source pixel: 0 (white/transparent) .. 1 (black), turned
+    # into black pixels with a 2x2 ordered dither over output coordinates.
     px = img.load()
     rows = []
     for y in range(h):
@@ -152,11 +195,7 @@ def sprite_bits(png_bytes: bytes, tmp: Path, scale: int):
             else:
                 darkness = 1.0 - (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
             black_count = int(round(darkness * len(DITHER_ORDER)))
-            if scale >= 2:
-                pos = (x % 2, y % 2)
-                black = DITHER_ORDER.index(pos) < black_count
-            else:
-                black = darkness >= 0.5
+            black = DITHER_ORDER.index((x % 2, y % 2)) < black_count
             if black:
                 row[x // 8] |= 1 << (7 - (x % 8))
         rows.append(bytes(row))
@@ -174,9 +213,9 @@ def hex_block(data: bytes, indent: str = "        ") -> str:
 def main():
     here = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--max-id", type=int, default=151, help="Highest national Pokédex number to include")
+    parser.add_argument("--max-id", type=int, default=1025, help="Highest national Pokédex number to include")
     parser.add_argument("--min-id", type=int, default=1)
-    parser.add_argument("--scale", type=int, default=2, help="Integer upscale applied to the 56x56 sprites")
+    parser.add_argument("--scale", type=int, default=2, help="Maximum integer upscale applied to sprites")
     parser.add_argument("--cache", type=Path, default=here / "cache", help="Download cache directory")
     parser.add_argument("--out", type=Path, default=here, help="Output directory for the C files")
     args = parser.parse_args()
@@ -189,7 +228,7 @@ def main():
     for pid in range(args.min_id, args.max_id + 1):
         species = json.loads(fetch(f"{API}/pokemon-species/{pid}", args.cache / "species" / f"{pid}.json"))
         pokemon = json.loads(fetch(f"{API}/pokemon/{pid}", args.cache / "pokemon" / f"{pid}.json"))
-        png = fetch(SPRITES.format(id=pid), args.cache / "sprites" / f"{pid}.png", binary=True)
+        png = fetch_sprite(pid, args.cache)
 
         name = pick_english(species["names"], "name") or pokemon["name"].title()
         genus = pick_english(species["genera"], "genus") or ""
@@ -229,17 +268,17 @@ def main():
     )
 
     # Sprites
-    out = [header, '#include "lvgl/lvgl.h"\n\n']
+    out = [header, '#include "pokemon_data.h"\n\n']
     out.append("#ifndef LV_ATTRIBUTE_MEM_ALIGN\n#define LV_ATTRIBUTE_MEM_ALIGN\n#endif\n\n")
     palette = bytes([0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF])  # transparent, black
     for e, (w, h, stride, rows) in zip(entries, sprites):
-        var = f"pokemon_sprite_{e['number']:03d}_map"
+        var = f"pokemon_sprite_{e['number']:04d}_map"
         out.append(f"static const LV_ATTRIBUTE_MEM_ALIGN LV_ATTRIBUTE_LARGE_CONST uint8_t {var}[] = {{\n")
         out.append(hex_block(palette + b"".join(rows)))
         out.append("\n};\n\n")
     out.append("const lv_image_dsc_t pokemon_sprites[] = {\n")
     for e, (w, h, stride, rows) in zip(entries, sprites):
-        var = f"pokemon_sprite_{e['number']:03d}_map"
+        var = f"pokemon_sprite_{e['number']:04d}_map"
         out.append(
             "    {\n"
             "        .header.magic = LV_IMAGE_HEADER_MAGIC,\n"
@@ -278,7 +317,7 @@ def main():
             "    },\n"
         )
     out.append("};\n\n")
-    out.append(f"const uint16_t pokemon_entries_count = {len(entries)};\n")
+    out.append("const uint16_t pokemon_entries_count = sizeof(pokemon_entries) / sizeof(pokemon_entries[0]);\n")
     (args.out / "pokemon_data.c").write_text("".join(out), encoding="utf-8")
 
     clang_format = shutil.which("clang-format")
