@@ -7,6 +7,7 @@
 #include "views/clock.h"
 #include "views/logo.h"
 #include "views/passkey.h"
+#include "views/pokemon.h"
 #include "views/weather.h"
 
 view_mode_t active_view_mode = VIEW_MODE_NONE;
@@ -38,6 +39,9 @@ void lv_helper_set_view_mode(view_mode_t view_mode) {
     case VIEW_MODE_WEATHER:
       lv_helper_weather_create();
       break;
+    case VIEW_MODE_POKEMON:
+      lv_helper_pokemon_create();
+      break;
     case VIEW_MODE_MAX:
       ESP_ERROR_CHECK(ESP_FAIL);
       break;
@@ -65,6 +69,9 @@ void lv_helper_update() {
     break;
   case VIEW_MODE_WEATHER:
     lv_helper_weather_update(&lv_helper_view_mode_weather_data);
+    break;
+  case VIEW_MODE_POKEMON:
+    lv_helper_pokemon_update(&lv_helper_view_mode_pokemon_data);
     break;
   case VIEW_MODE_MAX:
     ESP_ERROR_CHECK(ESP_FAIL);
