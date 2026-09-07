@@ -50,6 +50,10 @@ export default function AppSelectionBlock({
             value={gatt.APP_SELECTION_VAL_WEATHER.toString()}
             label="Daily weather forecast"
           />
+          <Radio
+            value={gatt.APP_SELECTION_VAL_POKEMON.toString()}
+            label="Pokémon of the day"
+          />
         </Group>
       </Radio.Group>
     </>

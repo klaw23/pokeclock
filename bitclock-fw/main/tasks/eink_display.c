@@ -21,7 +21,9 @@
 #include "lvgl/views/clock.h"
 #include "lvgl/views/logo.h"
 #include "lvgl/views/passkey.h"
+#include "lvgl/views/pokemon.h"
 #include "lvgl/views/weather.h"
+#include "pokemon/pokemon.h"
 #include "scd4x.h"
 #include "sgp4x.h"
 #include "sht4x.h"
@@ -513,6 +515,15 @@ void eink_task_run(void *pvParameters) {
     lv_helper_view_mode_clock_data.hour24 =
         bitclock_nvs_get_clock_format() == BITCLOCK_NVS_CLOCK_FORMAT_VAL_24HR;
 
+    struct tm pokemon_timeinfo;
+    localtime_r(&lv_helper_view_mode_clock_data.curtime, &pokemon_timeinfo);
+    lv_helper_view_mode_pokemon_data.curtime =
+        lv_helper_view_mode_clock_data.curtime;
+    lv_helper_view_mode_pokemon_data.hour24 =
+        lv_helper_view_mode_clock_data.hour24;
+    lv_helper_view_mode_pokemon_data.pokemon_index =
+        pokemon_index_for_day(&pokemon_timeinfo);
+
     aqi_data.temp_celsius = sht4x_current_temp_celsius();
     aqi_data.humidity = sht4x_current_relative_humidity();
     aqi_data.co2_ppm = scd4x_current_co2_ppm();
@@ -569,6 +580,8 @@ void eink_task_run(void *pvParameters) {
         view_mode = VIEW_MODE_CLOCK;
       } else if (app_selection == BITCLOCK_NVS_APP_SELECTION_VAL_WEATHER) {
         view_mode = VIEW_MODE_WEATHER;
+      } else if (app_selection == BITCLOCK_NVS_APP_SELECTION_VAL_POKEMON) {
+        view_mode = VIEW_MODE_POKEMON;
       }
       lv_helper_set_view_mode(view_mode);
     }
